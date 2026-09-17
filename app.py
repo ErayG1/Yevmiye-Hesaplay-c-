@@ -6,7 +6,7 @@ import io
 st.set_page_config(page_title="Aylik Yevmiye Hesaplayici", layout="wide")
 
 st.title("📊 Aylik Yevmiye & Puantaj Hesaplayici")
-st.write("Mobil veya bilgisayardan Excel dosyalarinizi yukleyerek 30 gunluk ozet rapor olusturabilirsiniz.")
+st.write("Mobil veya bilgisayardan Excel dosyalarinizi yukleyerek 30 gunluk bir ozet raporu olusturabilirsiniz.")
 
 if "uploaded_hashes" not in st.session_state:
     st.session_state.uploaded_hashes = set()
@@ -14,9 +14,44 @@ if "uploaded_hashes" not in st.session_state:
 def get_file_hash(file_bytes):
     return hashlib.md5(file_bytes).hexdigest()
 
+def read_excel_smart(file_bytes, file_name):
+    """Excel, HTML tablosu veya CSV tabanli .xls dosyalarini akilli sekilde okur."""
+    buffer = io.BytesIO(file_bytes)
+    
+    # 1. Deneme: Standart openpyxl veya xlrd ile okuma
+    try:
+        return pd.read_excel(buffer)
+    except Exception:
+        pass
+
+    # 2. Deneme: Motoru xlrd olarak zorlayarak okuma (.xls)
+    try:
+        buffer.seek(0)
+        return pd.read_excel(buffer, engine='xlrd')
+    except Exception:
+        pass
+
+    # 3. Deneme: Bazi sistemler HTML tablosunu .xls uzantisiyla kaydeder
+    try:
+        buffer.seek(0)
+        dfs = pd.read_html(buffer)
+        if dfs:
+            return dfs[0]
+    except Exception:
+        pass
+
+    # 4. Deneme: CSV formatinda olma ihtimali
+    try:
+        buffer.seek(0)
+        return pd.read_csv(buffer, sep=None, engine='python')
+    except Exception:
+        pass
+
+    raise Exception("Excel dosya formati okunamadi. Lutfen dosya formatini kontrol edin.")
+
 uploaded_files = st.file_uploader(
     "Yevmiye Excel Dosyalarini Secin (Coklu Secim)", 
-    type=["xlsx", "xls"], 
+    type=["xlsx", "xls", "csv"], 
     accept_multiple_files=True
 )
 
@@ -35,7 +70,7 @@ if uploaded_files:
             continue
 
         try:
-            df = pd.read_excel(io.BytesIO(file_bytes))
+            df = read_excel_smart(file_bytes, file.name)
             
             # Sutun isimlerini standartlastirma
             df.columns = [str(col).strip().upper() for col in df.columns]
@@ -48,13 +83,15 @@ if uploaded_files:
                 "TC KIMLIK": "TC",
                 "AD SOYAD": "ISIM",
                 "ISIM SOYISIM": "ISIM",
+                "AD SOYADI": "ISIM",
                 "YEVMİYE": "YEVMIYE",
-                "GUNLUK YEVMİYE": "YEVMIYE"
+                "GUNLUK YEVMİYE": "YEVMIYE",
+                "YEVMİYE TUTARI": "YEVMIYE"
             }
             df = df.rename(columns=column_mapping)
 
             if not {"TC", "ISIM", "YEVMIYE"}.issubset(df.columns):
-                st.error(f"❌ **{file.name}** dosyasinda gerekli sutunlar (TC, ISIM, YEVMIYE) bulunamadi.")
+                st.error(f"❌ **{file.name}** dosyasinda gerekli sutunlar (TC, ISIM, YEVMIYE) bulunamadi. Mevcut sutunlar: {list(df.columns)}")
                 continue
 
             # Veri tiplerini duzenleme
@@ -72,7 +109,6 @@ if uploaded_files:
     if all_data:
         combined_df = pd.concat(all_data, ignore_index=True)
 
-        # TC ve ISIM ile gruplayip toplam yevmiye ve gun sayisini hesaplama
         summary_df = combined_df.groupby(["TC", "ISIM"]).agg(
             CALISILAN_GUN=("YEVMIYE", "count"),
             TOPLAM_YEVMIYE=("YEVMIYE", "sum"),
